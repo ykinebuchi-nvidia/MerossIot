@@ -1,4 +1,4 @@
-from meross_iot.cloud.abilities import HUB_MS100_ALL, HUB_MS100_TEMPHUM, HUB_MS100_ALERT
+from meross_iot.cloud.constants import HUB_MS100_ALL, HUB_MS100_TEMPHUM, HUB_MS100_ALERT
 from meross_iot.cloud.devices.subdevices.generic import GenericSubDevice
 from meross_iot.logger import SENSORS_LOGGER as l
 from meross_iot.meross_event import SensorTemperatureChange, SensorTemperatureAlert

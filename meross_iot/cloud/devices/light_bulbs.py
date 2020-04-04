@@ -1,4 +1,4 @@
-from meross_iot.cloud.abilities import *
+from meross_iot.cloud.constants import *
 from meross_iot.cloud.device import AbstractMerossDevice
 from meross_iot.logger import BULBS_LOGGER as l
 from meross_iot.meross_event import BulbSwitchStateChangeEvent, BulbLightStateChangeEvent

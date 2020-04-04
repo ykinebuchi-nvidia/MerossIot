@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
 from threading import RLock
+from typing import Optional
 
-from meross_iot.cloud.abilities import *
+from meross_iot.cloud.constants import *
 from meross_iot.cloud.exceptions.OfflineDeviceException import OfflineDeviceException
 from meross_iot.cloud.timeouts import LONG_TIMEOUT, SHORT_TIMEOUT
 from meross_iot.logger import DEVICE_LOGGER as l
@@ -9,139 +10,118 @@ from meross_iot.meross_event import DeviceOnlineStatusEvent, DeviceBindEvent, De
 
 
 class AbstractMerossDevice(ABC):
-    # Device status + lock to protect concurrent access
-    _state_lock = None
-    online = False
-
-    # Device info and connection parameters
-    uuid = None
-    app_id = None
-    name = None
-    type = None
-    hwversion = None
-    fwversion = None
-
-    # Cached list of abilities
-    _abilities = None
-
-    # Cloud client: the object that handles mqtt communication with the Meross Cloud
-    __cloud_client = None
-
-    # Data structure for firing events.
-    __event_handlers_lock = None
-    __event_handlers = None
-
-    def __init__(self, cloud_client, device_uuid, **kwargs):
-        self.__cloud_client = cloud_client
+    # TODO: typing for the following
+    def __init__(self, connection_manager, **kwargs):
+        # The following property, holds the raw_status data about this device.
+        # TODO: check if we really need this
+        self._raw_state = {}
         self._state_lock = RLock()
-        self.__event_handlers_lock = RLock()
-        self.__event_handlers = []
 
-        self.uuid = device_uuid
-
-        if "channels" in kwargs:
-            self._channels = kwargs['channels']
+        # Get device UUID
+        if "uuid" not in kwargs:
+            raise Exception("No UUID was found for this device")
+        self._device_uuid = kwargs['uuid']
 
         # Information about device
         if "devName" in kwargs:
-            self.name = kwargs['devName']
+            self._device_name = kwargs['devName']
         if "deviceType" in kwargs:
-            self.type = kwargs['deviceType']
+            self._device_type = kwargs['deviceType']
         if "fmwareVersion" in kwargs:
-            self.fwversion = kwargs['fmwareVersion']
+            self._device_firmware_version = kwargs['fmwareVersion']
         if "hdwareVersion" in kwargs:
-            self.hwversion = kwargs['hdwareVersion']
+            self._device_hardware_version = kwargs['hdwareVersion']
         if "onlineStatus" in kwargs:
-            self.online = kwargs['onlineStatus'] == 1
+            self._device_online_status = kwargs['onlineStatus']
+        if "channels" in kwargs:
+            self._channels = kwargs['channels']
 
-    def handle_push_notification(self, namespace, payload, from_myself=False):
-        # Handle the ONLINE push notification
-        # Leave the rest to the specific implementation
-        if namespace == ONLINE:
-            old_online_status = self.online
-            status = int(payload['online']['status'])
-            if status == 2:
-                with self._state_lock:
-                    self.online = False
-            elif status == 1:
-                with self._state_lock:
-                    self.online = True
-            else:
-                l.error("Unknown online status has been reported from the device: %d" % status)
+    def handle_push_notification(self,
+                                 namespace: str,
+                                 payload: Optional[dict],
+                                 already_handled: bool,
+                                 **kwargs) -> bool:
+        """
+        Handles the push notifications received from the Meross Cloud.
 
-            # If the online status changed, fire the corresponding event
-            if old_online_status != self.online:
-                evt = DeviceOnlineStatusEvent(self, self.online)
-                self.fire_event(evt)
-        elif namespace == BIND:
+        *Note*: sub-classes that override this method MUST call the `super()`.handle_push_notification() method in
+        any case. Then the return value must be True either if the current implementation has handled the event or
+        if it has been handled by the parent class. False otherwise.
+
+        *Careful! Python implements boolean shortcuts, so the following snippet should not be used*::
+
+            return handled or super.handle_push_notification()
+
+        Instead, do something like the following::
+
+            parent_handled = super().handle_push_notification
+            return handled or parent_handled.
+
+        :param namespace: Event namespace
+        :param payload:  Event payload
+        :param already_handled: True if the event was already handled by one of the sub-classes, False otherwise
+        :return: True if the current implementation or a parent one has handled the event, False otherwise
+        """
+        if namespace == Namespace.ONLINE:
+            # TODO: Do we need to parse the online status or do we keep it as raw?
+            self._device_online_status = payload['online']['status']
+            # TODO: Fire event?
+            return True
+
+        elif namespace == Namespace.BIND:
             data = payload['bind']
-            evt = DeviceBindEvent(device=self, bind_data=data)
-            self.fire_event(evt)
-        elif namespace == UNBIND:
+            # TODO: Fire event?
+            return True
+
+        elif namespace == Namespace.UNBIND:
             # Let everybody know we are going down before doing anything
             evt = DeviceUnbindEvent(device=self)
-            self.fire_event(evt)
-            # Let's handle stat clearing and resource release
-            self._handle_unbound()
-        else:
-            self._handle_push_notification(namespace, payload, from_myself=from_myself)
+            # TODO: Fire event?
+            # TODO: clear and release resources?
+            return True
+        elif not already_handled:
+            # This is the base-class implementation.
+            # If sub-classes did not handle this event, it was unhandled. In this case, we need to
+            # log a warning.
+            l.warning(f"Unhandled event for namespace {namespace}")
+            l.debug(f"Unhandled event for namespace {namespace}, payload {payload}")
+            return False
 
-    def _handle_unbound(self):
-        with self._state_lock:
-            self.online = False
-        # Unregister all the callbacks
-        with self.__event_handlers_lock:
-            self.__event_handlers.clear()
-
-    def register_event_callback(self, callback):
-        with self.__event_handlers_lock:
-            if callback not in self.__event_handlers:
-                self.__event_handlers.append(callback)
-            else:
-                l.debug("The callback you tried to register is already present.")
-                pass
-
-    def unregister_event_callback(self, callback):
-        with self.__event_handlers_lock:
-            if callback in self.__event_handlers:
-                self.__event_handlers.remove(callback)
-            else:
-                l.debug("The callback you tried to unregister is not present.")
-                pass
-
-    def fire_event(self, eventobj):
-        for c in self.__event_handlers:
-            try:
-                c(eventobj)
-            except:
-                l.exception("Unhandled error occurred while executing the registered event-callback")
-
-    @abstractmethod
-    def _handle_push_notification(self, namespace, payload, from_myself=False) -> bool:
+    async def execute_command(self,
+                        command_method: CommandMethod,
+                        namespace: Namespace,
+                        payload: dict,
+                        timeout: int = SHORT_TIMEOUT,
+                        online_check=True,
+                        **kwargs):
         """
-        Handles push messages for this device. This method should be implemented by the base class in order
-        to catch status changes issued by other clients (i.e. the Meross app on the user's device).
-        :param namespace:
-        :param message:
-        :param from_myself: boolean flag. When true, it means that the notification is generated in response to a
-        command that was issued by this client. When false, it means that another client generated the event.
-        :return: True if the push notification was handled, false otherwise
+        Sends the command to the device.
+        When *online_check* is True, this method will first check if the device is online and will only issue the
+        command if it is still connected. Issuing a command to an offline device will cause OfflineDeviceException
+        to be raised.
+
+        On the contrary, when *online_check* is False, the command is issued to the device regardless of its current
+        online status. In this case, if the device results offline, an exception is raised.
+        :param command_method: method
+        :param namespace: command namespace
+        :param payload: command data
+        :param timeout: timeout in seconds for the command to execute
+        :param online_check: whether to check if the device is online before sending the command.
+        :param kwargs:
+        :return:
         """
-        pass
-
-    @abstractmethod
-    def get_status(self, force_status_refresh=False):
-        pass
-
-    def execute_command(self, command, namespace, payload, callback=None, timeout=SHORT_TIMEOUT, online_check=True):
+        # If the device is not online, what's the point of issuing the command?
         with self._state_lock:
-            # If the device is not online, what's the point of issuing the command?
             if online_check and not self.online:
                 raise OfflineDeviceException("The device %s (%s) is offline. The command cannot be executed" %
-                                             (self.name, self.uuid))
+                                             (self._device_name, self._device_uuid))
 
-        return self.__cloud_client.execute_cmd(self.uuid, command, namespace, payload, callback=callback, timeout=timeout)
-
+            return self.__cloud_client.execute_cmd(uuid=self._device_uuid,
+                                                   command=command_method,
+                                                   namespace=namespace,
+                                                   payload=payload,
+                                                   timeout=timeout)
+    """
     def get_sys_data(self):
         return self.execute_command("GET", ALL, {}, online_check=False)
 
@@ -150,46 +130,4 @@ class AbstractMerossDevice(ABC):
         if self._abilities is None:
             self._abilities = self.execute_command("GET", ABILITY, {})['ability']
         return self._abilities
-
-    def get_report(self):
-        return self.execute_command("GET", REPORT, {})
-
-    def get_wifi_list(self):
-        if WIFI_LIST in self.get_abilities():
-            return self.execute_command("GET", WIFI_LIST, {}, timeout=LONG_TIMEOUT)
-        else:
-            l.error("This device does not support the WIFI_LIST ability")
-            return None
-
-    def get_trace(self):
-        if TRACE in self.get_abilities():
-            return self.execute_command("GET", TRACE, {})
-        else:
-            l.error("This device does not support the TRACE ability")
-            return None
-
-    def get_debug(self):
-        if DEBUG in self.get_abilities():
-            return self.execute_command("GET", DEBUG, {})
-        else:
-            l.error("This device does not support the DEBUG ability")
-            return None
-
-    def supports_consumption_reading(self):
-        return CONSUMPTIONX in self.get_abilities()
-
-    def supports_electricity_reading(self):
-        return ELECTRICITY in self.get_abilities()
-
-    def supports_light_control(self):
-        return LIGHT in self.get_abilities()
-
-    def __str__(self):
-        basic_info = "%s (%s, HW %s, FW %s): " % (
-            self.name,
-            self.type,
-            self.hwversion,
-            self.fwversion
-        )
-
-        return basic_info
+    """

@@ -1,4 +1,4 @@
-from meross_iot.cloud.abilities import HUB_BATTERY
+from meross_iot.cloud.constants import HUB_BATTERY
 from meross_iot.cloud.device import AbstractMerossDevice, HUB_ONLINE
 from meross_iot.cloud.timeouts import LONG_TIMEOUT
 from meross_iot.logger import SUBDEVICE_LOGGER as l

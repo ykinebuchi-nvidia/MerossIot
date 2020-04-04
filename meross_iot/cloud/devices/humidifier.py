@@ -1,6 +1,6 @@
 from enum import Enum
 
-from meross_iot.cloud.abilities import *
+from meross_iot.cloud.constants import *
 from meross_iot.cloud.device import AbstractMerossDevice
 from meross_iot.cloud.devices.light_bulbs import MODE_RGB, to_rgb, MODE_LUMINANCE, MODE_TEMPERATURE
 from meross_iot.logger import HUMIDIFIER_LOGGER as l

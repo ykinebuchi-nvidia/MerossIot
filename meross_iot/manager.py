@@ -1,7 +1,7 @@
 from threading import RLock
 
 from meross_iot.api import MerossHttpClient
-from meross_iot.cloud.abilities import BIND, UNBIND, REPORT, ONLINE
+from meross_iot.cloud.constants import BIND, UNBIND, REPORT, ONLINE
 from meross_iot.cloud.client import MerossCloudClient
 from meross_iot.cloud.client_status import ClientStatus
 from meross_iot.cloud.device_factory import build_wrapper, build_subdevice_wrapper
